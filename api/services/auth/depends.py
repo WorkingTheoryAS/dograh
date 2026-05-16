@@ -1,7 +1,7 @@
 from typing import Annotated, Optional
 
 import httpx
-from fastapi import Header, HTTPException, Query, WebSocket
+from fastapi import Header, HTTPException, Query, Request, WebSocket
 from loguru import logger
 from pydantic import ValidationError
 
@@ -10,6 +10,7 @@ from api.db import db_client
 from api.db.models import UserModel
 from api.enums import PostHogEvent
 from api.schemas.user_configuration import UserConfiguration
+from api.services.auth.santaclues import handle_santaclues_jwt_auth
 from api.services.auth.stack_auth import stackauth
 from api.services.configuration.registry import ServiceProviders
 from api.services.posthog_client import capture_event
@@ -19,9 +20,20 @@ from api.utils.auth import decode_jwt_token
 async def get_user(
     authorization: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    request: Request | None = None,
 ) -> UserModel:
     # ------------------------------------------------------------------
-    # Check if API key is provided (takes precedence)
+    # SantaClues fork: per-request JWT mode.
+    # Activated by AUTH_PROVIDER=santaclues. Takes precedence over every
+    # other auth path — when active, X-API-Key is ignored (the engine no
+    # longer issues per-org API keys) and Stack Auth + OSS email/password
+    # routes are 410-Gone (see api/routes/auth.py).
+    # ------------------------------------------------------------------
+    if AUTH_PROVIDER == "santaclues":
+        return await handle_santaclues_jwt_auth(authorization, request)
+
+    # ------------------------------------------------------------------
+    # Check if API key is provided (takes precedence in non-santaclues modes)
     # ------------------------------------------------------------------
     if x_api_key:
         return await _handle_api_key_auth(x_api_key)

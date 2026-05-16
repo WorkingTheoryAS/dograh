@@ -143,6 +143,17 @@ FORCE_TURN_RELAY = os.getenv("FORCE_TURN_RELAY", "false").lower() == "true"
 OSS_JWT_SECRET = os.getenv("OSS_JWT_SECRET", "change-me-in-production")
 OSS_JWT_EXPIRY_HOURS = int(os.getenv("OSS_JWT_EXPIRY_HOURS", "720"))  # 30 days
 
+# SantaClues fork: per-request JWT auth mode.
+# Activated by setting AUTH_PROVIDER=santaclues.
+#
+# SANTACLUES_JWT_SIGNING_KEY: 256-bit hex secret shared with the
+# SantaClues server. Engine fails-closed if unset when the mode is
+# active. SANTACLUES_JWT_PREVIOUS_KEY is the optional rotation companion
+# — engine accepts tokens signed with either key during the rotation
+# window (typically 24h).
+SANTACLUES_JWT_SIGNING_KEY = os.getenv("SANTACLUES_JWT_SIGNING_KEY")
+SANTACLUES_JWT_PREVIOUS_KEY = os.getenv("SANTACLUES_JWT_PREVIOUS_KEY")
+
 # REMOVE-AFTER 2026-05-15: transitional flag. When True, Telnyx webhook
 # signature verification is skipped for configs that have no
 # webhook_public_key set (existing configs predating the field). Set in prod

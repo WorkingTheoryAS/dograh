@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
+from api.constants import AUTH_PROVIDER
 from api.db import db_client
 from api.db.models import UserModel
 from api.enums import PostHogEvent
@@ -15,8 +16,23 @@ router = APIRouter(
 )
 
 
+# SantaClues fork: 410 Gone the OSS signup/login routes when running
+# under AUTH_PROVIDER=santaclues. Tenant identity comes from the
+# per-request JWT minted by the SantaClues server; the engine no longer
+# has standalone user accounts. Returning 410 (not 404) so any forgotten
+# caller surfaces loudly during migration. Drop the routes entirely
+# next quarterly upstream rebase.
+def _reject_if_santaclues_mode() -> None:
+    if AUTH_PROVIDER == "santaclues":
+        raise HTTPException(
+            status_code=410,
+            detail="endpoint removed under santaclues auth mode",
+        )
+
+
 @router.post("/signup", response_model=AuthResponse)
 async def signup(request: SignupRequest):
+    _reject_if_santaclues_mode()
     # Check if email is already taken
     existing_user = await db_client.get_user_by_email(request.email)
     if existing_user:
@@ -78,6 +94,7 @@ async def signup(request: SignupRequest):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(request: LoginRequest):
+    _reject_if_santaclues_mode()
     # Look up user by email
     user = await db_client.get_user_by_email(request.email)
     if not user or not user.password_hash:

@@ -29,6 +29,10 @@ from loguru import logger
 from api.constants import REDIS_URL
 from api.mcp_server import mcp
 from api.routes.main import router as main_router
+from api.services.auth.santaclues_middleware import (
+    SantaCluesAuditLogMiddleware,
+    SantaCluesRateLimitMiddleware,
+)
 from api.services.pipecat.tracing_config import (
     handle_langfuse_sync,
     load_all_org_langfuse_credentials,
@@ -91,6 +95,17 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# SantaClues fork: per-org rate limit + audit log middleware. Both
+# self-disable when AUTH_PROVIDER != "santaclues" so upstream behavior
+# is bit-for-bit unchanged in other deployment modes.
+#
+# Starlette applies middleware in REVERSE add-order, so the LAST one
+# added runs first. We want: rate-limit OUTER (refuses before audit
+# overhead) and audit log INNER (records the 429). So add audit first,
+# rate-limit second.
+app.add_middleware(SantaCluesAuditLogMiddleware)
+app.add_middleware(SantaCluesRateLimitMiddleware)
 
 api_router = APIRouter()
 

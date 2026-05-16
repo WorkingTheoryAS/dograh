@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
+from api.constants import AUTH_PROVIDER
 from api.db import db_client
 from api.db.models import (
     UserModel,
@@ -243,6 +244,15 @@ async def create_api_key(
     user: UserModel = Depends(get_user),
 ) -> CreateAPIKeyResponse:
     """Create a new API key for the user's selected organization."""
+    # SantaClues fork: under AUTH_PROVIDER=santaclues there are no
+    # per-org engine API keys — tenant identity is established by the
+    # per-request JWT minted by the SantaClues server. 410 the endpoint
+    # so any forgotten caller surfaces loudly during migration.
+    if AUTH_PROVIDER == "santaclues":
+        raise HTTPException(
+            status_code=410,
+            detail="endpoint removed under santaclues auth mode",
+        )
     if not user.selected_organization_id:
         raise HTTPException(status_code=400, detail="No organization selected")
 
