@@ -20,7 +20,13 @@ from api.utils.auth import decode_jwt_token
 async def get_user(
     authorization: Annotated[str | None, Header()] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
-    request: Request | None = None,
+    # FastAPI auto-injects Request when called as a dependency from an
+    # HTTP route. Direct callers (e.g. get_user_ws below) pass None
+    # explicitly. The `# type: ignore` is required because FastAPI's
+    # dependency-analyzer refuses `Request | None` (treats it as a
+    # Pydantic body field). Bare `Request = None` lets FastAPI's
+    # special-case injector handle it AND keeps direct calls working.
+    request: Request = None,  # type: ignore[assignment]
 ) -> UserModel:
     # ------------------------------------------------------------------
     # SantaClues fork: per-request JWT mode.
