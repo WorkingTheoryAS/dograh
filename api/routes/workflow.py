@@ -453,6 +453,13 @@ async def create_workflow(
         "template_context_variables": workflow.template_context_variables,
         "call_disposition_codes": workflow.call_disposition_codes,
         "workflow_configurations": workflow.workflow_configurations,
+        # SantaClues fork: upstream's hand-built dict drops workflow_uuid
+        # even though the WorkflowResponse schema declares it. SantaClues'
+        # sync worker persists this UUID to AiAgentSeller.dograhAgentUuid
+        # (used by the outbound trigger path `/api/v1/public/agent/{uuid}`)
+        # — without it, the Workflow tab in the SantaClues UI stays hidden
+        # and outbound calls can't dispatch. Add it back.
+        "workflow_uuid": workflow.workflow_uuid,
     }
 
 
