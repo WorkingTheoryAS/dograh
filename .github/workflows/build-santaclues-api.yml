@@ -3,8 +3,14 @@ name: Build & push santaclues-fork dograh-api image
 on:
   push:
     branches: [santaclues]
+    # The Dockerfile pulls in `api/`, `pipecat/`, `scripts/`, `docs/`
+    # from the repo root, so any of those subtrees changing should
+    # rebuild the image.
     paths:
       - "api/**"
+      - "pipecat/**"
+      - "scripts/**"
+      - "docs/**"
       - ".github/workflows/build-santaclues-api.yml"
   workflow_dispatch: {}
 
@@ -40,7 +46,9 @@ jobs:
       - name: Build & push api image
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
-          context: ./api
+          # Repo root, not ./api — the Dockerfile COPYs from api/,
+          # pipecat/, scripts/, docs/ all of which sit at the root.
+          context: .
           file: ./api/Dockerfile
           push: true
           tags: |
