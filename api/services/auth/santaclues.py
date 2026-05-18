@@ -87,7 +87,11 @@ def _verify_jwt(token: str) -> dict:
     if not SANTACLUES_JWT_SIGNING_KEY:
         # Fail-closed: never accept tokens when the signing key is unset.
         # Avoids the trap where a missing env defaults to a weak key.
-        logger.error("santaclues auth: SANTACLUES_JWT_SIGNING_KEY not set; rejecting")
+        logger.bind(
+            santaclues_security_event=True,
+            source="ai-agent-engine.auth.failed",
+            reason="signing_key_unset",
+        ).error("santaclues auth: SANTACLUES_JWT_SIGNING_KEY not set; rejecting")
         raise HTTPException(status_code=401, detail=_GENERIC_AUTH_ERROR)
 
     candidate_keys = [SANTACLUES_JWT_SIGNING_KEY]
@@ -114,7 +118,17 @@ def _verify_jwt(token: str) -> dict:
             last_error = err
             continue
 
-    logger.warning(f"santaclues auth: JWT verification failed ({last_error})")
+    # Structured `source` lets operators `logcli query '{job="dograh-api"}
+    # |~ "ai-agent-engine.auth.failed"'` in Loki to find every JWT
+    # verification failure separate from routine 404s. The `reason` field
+    # carries the specific PyJWT error class so we can distinguish bad-sig
+    # / expired / missing-claim without leaking it to the response body.
+    reason = type(last_error).__name__ if last_error else "unknown"
+    logger.bind(
+        santaclues_security_event=True,
+        source="ai-agent-engine.auth.failed",
+        reason=reason,
+    ).warning(f"santaclues auth: JWT verification failed ({last_error})")
     raise HTTPException(status_code=401, detail=_GENERIC_AUTH_ERROR)
 
 
@@ -129,7 +143,14 @@ async def _check_jti_replay(jti: str) -> None:
     # set(..., nx=True, ex=TTL) returns True on success, None on collision.
     acquired = await redis.set(key, "1", nx=True, ex=JTI_REPLAY_TTL_SEC)
     if not acquired:
-        logger.warning(f"santaclues auth: replay detected jti={jti}")
+        # Separate `source` from generic auth.failed so operators can
+        # alert specifically on replay-detected (suggests a captured-token
+        # attack rather than a misconfigured client).
+        logger.bind(
+            santaclues_security_event=True,
+            source="ai-agent-engine.auth.replay-detected",
+            jti=jti,
+        ).warning(f"santaclues auth: replay detected jti={jti}")
         raise HTTPException(status_code=401, detail=_GENERIC_AUTH_ERROR)
 
 

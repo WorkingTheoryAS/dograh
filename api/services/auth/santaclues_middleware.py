@@ -89,9 +89,16 @@ class SantaCluesRateLimitMiddleware(BaseHTTPMiddleware):
             if current == 1:
                 await redis.expire(key, 90)
             if current > _RATE_LIMIT_PER_MIN:
-                # Log + return 429. Engine-side rate limit is rare; if
-                # we hit it we want loud telemetry.
-                logger.warning(
+                # Structured source so operators can grep Loki for
+                # `ai-agent-engine.rate-limit-exceeded` independently of
+                # generic auth.failed lines — rate-limit trips suggest
+                # a runaway caller, not an attack.
+                logger.bind(
+                    santaclues_security_event=True,
+                    source="ai-agent-engine.rate-limit-exceeded",
+                    org_uuid=org_uuid,
+                    count=current,
+                ).warning(
                     f"santaclues rate-limit exceeded org={org_uuid} "
                     f"path={request.url.path} count={current}"
                 )
