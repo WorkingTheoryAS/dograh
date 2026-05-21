@@ -1,18 +1,30 @@
 """Public API endpoints for agent triggers.
 
-These endpoints are accessible with API key authentication and allow
-external systems to programmatically trigger phone calls.
+SantaClues fork: routes use the unified ``Depends(get_user)`` resolver
+(see ``api/services/auth/depends.py``) which in turn dispatches on
+``AUTH_PROVIDER`` — Stack Auth, OSS email/password, X-API-Key, or
+SantaClues JWT. Replacing the upstream bare-`Header(X-API-Key)`
+parameter on the trigger endpoints was missing from the original fork
+rebase: FastAPI parameter validation runs BEFORE dependencies, so a
+JWT-only caller (the only kind the SantaClues backend issues now) got
+a hard 422 "X-API-Key field required" before the auth dependency ever
+ran. Patched 2026-05-21 — see [reference_dograh_public_agent_jwt_fix.md].
+
+External systems can still trigger calls in non-SantaClues modes by
+supplying X-API-Key; get_user honours it via _handle_api_key_auth.
 """
 
 import random
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
 from api.db import db_client
+from api.db.models import UserModel
 from api.enums import TriggerState
+from api.services.auth.depends import get_user
 from api.services.quota_service import check_dograh_quota_by_user_id
 from api.services.telephony.factory import (
     get_default_telephony_provider,
@@ -60,7 +72,7 @@ def trigger_exists_in_workflow(workflow_definition: dict, trigger_path: str) -> 
 async def _initiate_call(
     uuid: str,
     request: TriggerCallRequest,
-    x_api_key: str,
+    user: UserModel,
     *,
     use_draft: bool,
 ) -> TriggerCallResponse:
@@ -69,18 +81,26 @@ async def _initiate_call(
     When ``use_draft`` is True the latest draft definition is executed;
     otherwise the published (released) definition is used.
     """
-    # 1. Validate API key
-    api_key = await db_client.validate_api_key(x_api_key)
-    if not api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    # 1. Resolve caller's organization. get_user always sets
+    #    selected_organization_id (either from JWT.sub in santaclues
+    #    mode, the API key's owning org in x-api-key mode, or the user's
+    #    Stack-selected team). A missing value is a server bug not a
+    #    client error — surface as 500 rather than masking with 401.
+    organization_id = user.selected_organization_id
+    if organization_id is None:
+        logger.error(
+            f"public/agent trigger: get_user returned UserModel without "
+            f"selected_organization_id (user_id={user.id})"
+        )
+        raise HTTPException(status_code=500, detail="user has no organization")
 
     # 2. Lookup agent trigger by UUID
     trigger = await db_client.get_agent_trigger_by_path(uuid)
     if not trigger:
         raise HTTPException(status_code=404, detail="Agent trigger not found")
 
-    # 3. Validate organization match (API key org must match trigger org)
-    if api_key.organization_id != trigger.organization_id:
+    # 3. Validate organization match — caller's org MUST own the trigger.
+    if organization_id != trigger.organization_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
     # 4. Validate trigger is active
@@ -90,7 +110,7 @@ async def _initiate_call(
     # 4.5 Check Dograh quota before initiating the call (apply the trigger's
     # workflow's model_overrides so we evaluate the keys this run will use).
     quota_result = await check_dograh_quota_by_user_id(
-        api_key.created_by, workflow_id=trigger.workflow_id
+        user.id, workflow_id=trigger.workflow_id
     )
     if not quota_result.has_quota:
         raise HTTPException(status_code=402, detail=quota_result.error_message)
@@ -176,7 +196,7 @@ async def _initiate_call(
             "telephony_configuration_id": resolved_cfg_id,
             **(request.initial_context or {}),
         },
-        user_id=api_key.created_by,
+        user_id=user.id,
         use_draft=use_draft,
     )
 
@@ -193,7 +213,7 @@ async def _initiate_call(
     webhook_url = (
         f"{backend_endpoint}/api/v1/telephony/{webhook_endpoint}"
         f"?workflow_id={trigger.workflow_id}"
-        f"&user_id={api_key.created_by}"
+        f"&user_id={user.id}"
         f"&workflow_run_id={workflow_run.id}"
         f"&organization_id={trigger.organization_id}"
     )
@@ -208,7 +228,7 @@ async def _initiate_call(
             webhook_url=webhook_url,
             workflow_run_id=workflow_run.id,
             workflow_id=trigger.workflow_id,
-            user_id=api_key.created_by,
+            user_id=user.id,
         )
     except Exception as e:
         logger.warning(
@@ -235,24 +255,24 @@ async def _initiate_call(
 async def initiate_call(
     uuid: str,
     request: TriggerCallRequest,
-    x_api_key: str = Header(..., alias="X-API-Key"),
+    user: UserModel = Depends(get_user),
 ):
     """Initiate a phone call against the published agent.
 
     Executes the workflow's currently released definition.
     """
-    return await _initiate_call(uuid, request, x_api_key, use_draft=False)
+    return await _initiate_call(uuid, request, user, use_draft=False)
 
 
 @router.post("/test/{uuid}", response_model=TriggerCallResponse)
 async def initiate_call_test(
     uuid: str,
     request: TriggerCallRequest,
-    x_api_key: str = Header(..., alias="X-API-Key"),
+    user: UserModel = Depends(get_user),
 ):
     """Initiate a phone call against the latest draft of the agent.
 
     Useful for verifying changes before publishing. Falls back to the
     published definition when no draft exists.
     """
-    return await _initiate_call(uuid, request, x_api_key, use_draft=True)
+    return await _initiate_call(uuid, request, user, use_draft=True)
